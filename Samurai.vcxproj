@@ -149,6 +149,11 @@
   <ItemGroup>
     <ClCompile Include="Entry.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="MatchmakingData.h" />
+    <ClInclude Include="PacketHelper.h" />
+    <ClInclude Include="Systems.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

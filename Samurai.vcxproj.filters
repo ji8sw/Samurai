@@ -3,4 +3,9 @@
   <ItemGroup>
     <ClCompile Include="Entry.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="PacketHelper.h" />
+    <ClInclude Include="Systems.h" />
+    <ClInclude Include="MatchmakingData.h" />
+  </ItemGroup>
 </Project>
