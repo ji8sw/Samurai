@@ -40,6 +40,7 @@ namespace Samurai
     class serverSystem : public networkSystem
     {
         std::vector<Matchmaking::sessionData> sessionList;
+        std::vector<ENetPeer*> allConnections;
 
     public:
         serverSystem()
@@ -53,6 +54,7 @@ namespace Samurai
             {
                 if (sessionList[SessInd].shouldBeDestroyed()) // delete empty sessions
                 {
+                    std::cout << "Deleting empty session (" << sessionList[SessInd].id << ")\n\n";
                     sessionList.erase(sessionList.begin() + SessInd);
                 }
             }
@@ -62,6 +64,28 @@ namespace Samurai
         {
             for (int index = 0; index < sessionList.size(); index++)
                 if (sessionList[index].id == id) return index;
+
+            return INVALID_INT;
+        }
+
+        int findSessionIndexByMemberAddress(ENetAddress addr)
+        {
+            for (int index = 0; index < sessionList.size(); index++)
+            {
+                for (playerConnectionInfo info : sessionList[index].playerList)
+                    if (info.matches(addr)) return index;
+            }
+
+            return INVALID_INT;
+        }
+
+        // returns an array index for allConnections, useful for determining if a player is connected to matchmaking at all
+        int findPeerIndexByAddress(ENetAddress addr)
+        {
+            for (int index = 0; index < allConnections.size(); index++)
+            {
+                if (areAdderessesMatching(allConnections[index]->address, addr)) return index;
+            }
 
             return INVALID_INT;
         }
@@ -102,7 +126,8 @@ namespace Samurai
                     switch (event.type)
                     {
                     case ENET_EVENT_TYPE_CONNECT:
-                        std::cout << "A new self connected from " << ipToString(event.peer->address.host) << std::endl;
+                        std::cout << "A new peer connected from " << ipToString(event.peer->address.host) << ":" << event.peer->address.port << std::endl;
+                        allConnections.push_back(event.peer);
                         break;
 
                     case ENET_EVENT_TYPE_RECEIVE:
@@ -117,14 +142,16 @@ namespace Samurai
                             case REQUEST_CREATE_SESSION:
                             {
                                 int maxPlayers = extractInt(incoming.data, offset);
-                                bool advertise = extractInt(incoming.data, offset) <= 1;
-                                std::cout << "Received REQUEST_CREATE_SESSION: Max Players = " << maxPlayers << ", Advertise = " << (advertise ? "Yes" : "No") << std::endl;
+                                joinabilityType joinability = (joinabilityType)extractInt(incoming.data, offset);
+                                bool advertise = joinability == allowAny; // no point advertising the session if its private
+                                std::cout << "Received REQUEST_CREATE_SESSION: Max Players = " << maxPlayers << ", Joinability = " << joinability << std::endl;
 
                                 playerConnectionInfo ConnectionInfo = playerConnectionInfo(event.peer->address);
                                 ConnectionInfo.connection = event.peer;
                                 sessionData NewSession = sessionData(ConnectionInfo, maxPlayers);
                                 NewSession.waitForHost = true; // host hasnt joined yet so dont destroy it cuz its empty
                                 NewSession.advertise = advertise;
+                                NewSession.joinability = joinability;
                                 sessionList.push_back(NewSession);
 
                                 std::cout << "Successfully created session, ID: " << NewSession.id << "\n\n";
@@ -161,27 +188,50 @@ namespace Samurai
 
                                 if (Data->host.matches(event.peer->address)) // this player created this session, join no matter
                                 {
+                                    Data->host.sessionId = Data->id;
                                     Data->playerList.push_back(Data->host);
+                                    Data->waitForHost = false;
                                     success = true;
                                     sendQuickResponseNow(event.peer, SESSION_JOINED_SUCCESS);
                                 }
                                 else // this is someone elses session, check if they can join
                                 {
-                                    if (Data->joinability == allowAny)
+                                    bool joinAllowed = false;
+
+                                    if (!Data->shouldBeDestroyed() && !Data->isFull())
                                     {
-                                        playerConnectionInfo connectionInfo = playerConnectionInfo(event.peer->address);
-                                        connectionInfo.connection = event.peer;
+                                        if (Data->joinability == allowAny) joinAllowed = true;
+                                        else if (Data->joinability == inviteOnly) // does an invite exist for this players address
+                                        {
+                                            for (int inviteIndex = 0; inviteIndex < Data->inviteList.size(); inviteIndex++)
+                                            {
+                                                if (areAdderessesMatching(Data->inviteList[inviteIndex], event.peer->address))
+                                                {
+                                                    // allow join and delete invite
+                                                    joinAllowed = true;
+                                                    Data->inviteList.erase(Data->inviteList.begin() + inviteIndex);
+                                                }
+                                            }
+                                        }
 
-                                        Packet packet;
-                                        packet.type = PROVIDE_JOINER_INFO;
-                                        appendAddress(packet.data, connectionInfo.address);
-                                        sendBroadcastNow(*Data, packet); // inform all existing players about the new player
+                                        if (joinAllowed)
+                                        {
+                                            playerConnectionInfo connectionInfo = playerConnectionInfo(event.peer->address);
+                                            connectionInfo.connection = event.peer;
+                                            connectionInfo.sessionId = Data->id;
 
-                                        Data->playerList.push_back(connectionInfo);
-                                        sendQuickResponseNow(event.peer, SESSION_JOINED_SUCCESS);
-                                        success = true;
+                                            Packet packet;
+                                            packet.type = PROVIDE_JOINER_INFO;
+                                            appendAddress(packet.data, connectionInfo.address);
+                                            sendBroadcastNow(*Data, packet); // inform all existing players about the new player
+
+                                            Data->playerList.push_back(connectionInfo);
+                                            sendQuickResponseNow(event.peer, SESSION_JOINED_SUCCESS);
+                                            success = true;
+                                        }
                                     }
-                                    else
+                                    
+                                    if (!joinAllowed)
                                     {
                                         sendRequestDeniedNow(event.peer, JOIN_NOT_ALLOWED);
                                     }
@@ -221,6 +271,63 @@ namespace Samurai
                                         break;
                                     }
                                 }
+
+                                // didnt find any session
+                                sendQuickResponseNow(event.peer, SESSION_FIND_FAILURE);
+                                break;
+                            }
+                            case REQUEST_SEND_INVITE:
+                            {
+                                ENetAddress target = extractAddress(incoming.data, offset);
+                                int sessionId = findSessionIndexByMemberAddress(event.peer->address);
+                                int targetConnectionIndex = findPeerIndexByAddress(target);
+
+                                if (targetConnectionIndex != INVALID_INT) // is the player connected to matchmaking at all?
+                                {
+                                    ENetPeer* targetConnection = allConnections[targetConnectionIndex];
+
+                                    int targetSessionIndex = findSessionIndexByMemberAddress(event.peer->address);
+                                    int targetSessionId = INVALID_INT;
+                                    if (targetSessionIndex != INVALID_INT)
+                                        targetSessionId = sessionList[targetSessionIndex].id;
+
+                                    // ensure we arent inviting the target to the session theyre already in
+                                    if (targetSessionId == INVALID_INT || targetSessionId != sessionId)
+                                    {
+                                        // send invite and the session id that they are invited to
+                                        Packet packet;
+                                        packet.type = PROVIDE_INVITE;
+                                        appendInt(packet.data, sessionId); // session id
+                                        sendNow(packet, targetConnection);
+                                    }
+                                }
+                                break;
+                            }
+                            case PROVIDE_QUICK_RESPONSE:
+                            {
+                                QuickResponseType type = (QuickResponseType)extractInt(incoming.data, offset);
+                                switch (type)
+                                {
+                                case NOTIFY_LEAVE_SESSION:
+                                {
+                                    Packet packet;
+                                    packet.type = PLAYER_LEFT;
+                                    appendAddress(packet.data, event.peer->address);
+                                    int sessionIndex = findSessionIndexByMemberAddress(event.peer->address);
+                                    sessionData& data = sessionList[sessionIndex];
+                                    
+                                    int pid = data.getPidFromAddress(event.peer->address);
+                                    data.playerList.erase(data.playerList.begin() + pid);
+
+                                    sendBroadcastNow(sessionList[sessionIndex], packet); // inform all existing players about the leave
+                                    break;
+                                }
+                                default:
+                                {
+                                    std::cout << "Got quick response: " << type << "\n\n";
+                                    break;
+                                }
+                                }
                                 break;
                             }
                             default:
@@ -235,8 +342,17 @@ namespace Samurai
                     }
 
                     case ENET_EVENT_TYPE_DISCONNECT:
-                        std::cout << "self disconnected." << "\n\n";
+                    {
+                        int connectionIndex = findPeerIndexByAddress(event.peer->address);
+
+                        if (connectionIndex != INVALID_INT)
+                        {
+                            allConnections.erase(allConnections.begin() + connectionIndex);
+                            std::cout << "peer disconnected: " << ipToString(event.peer->address.host) << ":" << event.peer->address.port << "\n\n";
+                        }
+
                         break;
+                    }
                     }
                 }
 
@@ -275,6 +391,37 @@ namespace Samurai
             isClient = true;
         }
 
+        int playerIndexByAddress(ENetAddress addr)
+        {
+            for (int pid = 0; pid < knownPlayerInfos.size(); pid++)
+            {
+                if (knownPlayerInfos[pid].matches(addr))
+                    return pid;
+            }
+
+            return INVALID_INT;
+        }
+
+        void leaveSession()
+        {
+            if (state == inSession)
+            {
+                sessionId = 0;
+                state = noSession;
+
+                for (Matchmaking::playerConnectionInfo& info : knownPlayerInfos)
+                {
+                    info.shouldDisconnect = true;
+                }
+
+                knownPlayerInfos.clear();
+
+                Packet leaveMessage;
+                leaveMessage.type = NOTIFY_LEAVE_SESSION;
+                sendQuickResponseNow(matchmakingHost, NOTIFY_LEAVE_SESSION);
+            }
+        }
+
         void userInputLoop()
         {
             std::string input;
@@ -285,6 +432,17 @@ namespace Samurai
 
                 if (input == "quit")
                 {
+                    if (state == inSession)
+                    {
+                        leaveSession();
+                        std::cout << "Leaving session...\n\n";
+
+                        while (state == inSession) { }
+
+                        enet_peer_disconnect_now(matchmakingHost, 0);
+                        enet_host_destroy(self);
+                    }
+
                     running = false;
                     break;
                 }
@@ -296,13 +454,34 @@ namespace Samurai
                         continue;
                     }
 
-                    std::cout << "Requesting session creation with details:\nAdvertise: Yes\nMax Players: 30\n\n";
+                    joinabilityType joinability = allowAny;
+                    int maxPlayers = 30;
+
+                    std::cout << "Joinability (0: Public, 1: Friends Only, 2: Private) > ";
+                    std::getline(std::cin, input);
+
+                    try
+                    {
+                        joinability = (joinabilityType)std::stoi(input);
+                    }
+                    catch (...) { joinability = allowAny; }
+
+                    std::cout << "Max Players > ";
+                    std::getline(std::cin, input);
+
+                    try
+                    {
+                        maxPlayers = std::stoi(input);
+                    }
+                    catch (...) { maxPlayers = 30; }
+
+                    std::cout << "Requesting session creation.\n\n";
                     Packet packet;
                     packet.type = REQUEST_CREATE_SESSION;
-                    appendInt(packet.data, 30); // max players
-                    appendInt(packet.data, true); // advertise
+                    appendInt(packet.data, maxPlayers);
+                    appendInt(packet.data, joinability);
                     sendNow(packet, matchmakingHost);
-                    state = waitingToHostNewSession;
+                    state = waitingForSessionInfo;
                 }
                 else if (input == "join_session") 
                 {
@@ -334,6 +513,17 @@ namespace Samurai
                     appendString(packet.data, input);
                     sendBroadcastNow(knownPlayerInfos, packet);
                 }
+                else if (input == "leave_session")
+                {
+                    if (state != inSession)
+                    {
+                        std::cout << "You must join a session first!\n\n";
+                        continue;
+                    }
+
+                    leaveSession();
+                    std::cout << "Leaving session...\n\n";
+                }
                 else 
                     std::cout << "Unknown command.\n";
             }
@@ -345,19 +535,24 @@ namespace Samurai
             {
                 Matchmaking::playerConnectionInfo& info = knownPlayerInfos[infoIndex];
 
+                for (int infoIndex2 = 0; infoIndex2 < knownPlayerInfos.size(); infoIndex2++) // check for duplicate connections
+                    if (infoIndex != infoIndex2 && info.matches(knownPlayerInfos[infoIndex2]))
+                        knownPlayerInfos.erase(knownPlayerInfos.begin() + infoIndex2);
+
                 if (info.isPlayer)
                 {
                     if (info.connected && info.shouldDisconnect)
                     {
-                        std::cout << "Disconnecting from player:" << ipToString(info.address.host) << ":" << info.address.port << "\n";
-                        knownPlayerInfos.erase(knownPlayerInfos.begin() + infoIndex);
+                        std::cout << "Disconnecting from player: " << ipToString(info.address.host) << ":" << info.address.port << "\n";
                         info.disconnect();
+                        knownPlayerInfos.erase(knownPlayerInfos.begin() + infoIndex);
                         continue;
                     }
-                    else if (!info.connected && !info.shouldDisconnect)
+                    else if (!info.connecting && !info.connected && !info.shouldDisconnect)
                     {
-                        std::cout << "Connecting to player:" << ipToString(info.address.host) << ":" << info.address.port << "\n";
+                        std::cout << "Connecting to player: " << ipToString(info.address.host) << ":" << info.address.port << "\n";
                         info.connection = enet_host_connect(self, &info.address, 2, 0);
+                        info.connecting = true;
                         continue;
                     }
                 }
@@ -366,10 +561,9 @@ namespace Samurai
 
         void networkLoop()
         {
-            // Main self loop
             while (running)
             {
-                // Handle events (incoming messages, disconnects, etc.)
+                // Handle events (incoming packets, disconnects, etc.)
                 ENetEvent event;
                 while (enet_host_service(self, &event, 1000) > 0)
                 {
@@ -377,22 +571,21 @@ namespace Samurai
                     {
                     case ENET_EVENT_TYPE_CONNECT:
                     {
-                        bool isPlayer = false;
-
                         for (Matchmaking::playerConnectionInfo& info : knownPlayerInfos)
                         {
                             if (info.matches(event.peer->address))
                             {
-                                info.isPlayer = true; isPlayer = true;
-                                info.connected = true;
-                                info.connection = event.peer;
-                                std::cout << "Successfully connected to player at " << ipToString(info.address.host) << ":" << info.address.port << "!\n";
+                                if (!info.connected)
+                                {
+                                    info.isPlayer = true;
+                                    info.connected = true;
+                                    info.connection = event.peer;
+                                    info.connecting = false;
+                                    std::cout << "Successfully connected to player at " << ipToString(info.address.host) << ":" << info.address.port << "!\n";
+                                }
                                 break;
                             }
                         }
-
-                        if (!isPlayer)
-                            std::cout << "Successfully connected to matchmaking server!" << std::endl;
                         break;
                     }
                     case ENET_EVENT_TYPE_RECEIVE:
@@ -406,19 +599,6 @@ namespace Samurai
                         {
                             switch (state)
                             {
-                            case waitingToHostNewSession:
-                            {
-                                sessionId = extractInt(packet.data, offset); // session id
-                                int count = extractInt(packet.data, offset); // player count
-
-                                std::cout << "Joining session with details:\nID: " << sessionId << "\nPlayer Count: " << count << "\n\n";
-                                Packet packet;
-                                packet.type = REQUEST_JOIN_SESSION;
-                                appendInt(packet.data, sessionId);
-                                sendNow(packet, matchmakingHost);
-                                state = joiningSession;
-                                break;
-                            }
                             case waitingForSessionInfo:
                             {
                                 sessionId = extractInt(packet.data, offset); // session id
@@ -474,9 +654,14 @@ namespace Samurai
                                 std::cout << "Got quick response: Failed to join session!\n\n";
                                 break;
                             }
-                            case PLAYER_JOINED:
+                            case SESSION_FIND_FAILURE:
                             {
-                                std::cout << "Got quick response: Failed to join session!\n\n";
+                                std::cout << "Got quick response: Failed to find a joinable session!\n\n";
+                                if (state == waitingForSessionInfo)
+                                {
+                                    if (sessionId != 0) state = inSession;
+                                    else state = noSession;
+                                }
                                 break;
                             }
                             default:
@@ -496,15 +681,26 @@ namespace Samurai
                             Matchmaking::playerConnectionInfo newInfo(addr);
                             newInfo.isPlayer = true;
 
-                            ENetPeer* newPeer = enet_host_connect(self, &newInfo.address, 2, 0);
-                            std::cout << "Connecting to player at " << ipToString(newInfo.address.host) << ":" << newInfo.address.port << std::endl;
-
-                            if (!newPeer)
-                            {
-                                std::cerr << "Failed to initiate connection to player at " << ipToString(newInfo.address.host) << ":" << newInfo.address.port << std::endl;
-                            }
-
                             knownPlayerInfos.push_back(newInfo);
+
+                            break;
+                        }
+                        case PLAYER_LEFT:
+                        {
+                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
+                            size_t offset = 0;
+                            ENetAddress addr = extractAddress(packet.data, offset); // addr of person who left
+
+                            if (!areAdderessesMatching(addr, self->address))
+                            {
+                                int pid = playerIndexByAddress(addr);
+
+                                if (pid != INVALID_INT)
+                                {
+                                    std::cout << ipToString(addr.host) << ":" << addr.port << " has left." << std::endl;
+                                    knownPlayerInfos[pid].shouldDisconnect = true;
+                                }
+                            }
 
                             break;
                         }
@@ -567,8 +763,19 @@ namespace Samurai
                         break;
                     }
                     case ENET_EVENT_TYPE_DISCONNECT:
-                        std::cout << "Matchmaking server disconnected." << std::endl;
-                        return;
+                        if (areAdderessesMatching(event.peer->address, matchmakingHost->address))
+                        {
+                            std::cout << "Matchmaking server disconnected." << std::endl;
+                            return;
+                        }
+
+                        int pid = playerIndexByAddress(event.peer->address);
+
+                        if (pid != INVALID_INT)
+                        {
+                            std::cout << ipToString(event.peer->address.host) << ":" << event.peer->address.port << " has left." << std::endl;
+                            knownPlayerInfos[pid].shouldDisconnect = true;
+                        }
                     }
                 }
 
@@ -629,11 +836,11 @@ namespace Samurai
             ENetEvent event;
             if (enet_host_service(self, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
             {
-                std::cout << "Successfully connected to server!" << "\n\n";
+                std::cout << "Successfully connected to matchmaking server!" << "\n\n";
             }
             else
             {
-                std::cerr << "Failed to connect to server." << std::endl;
+                std::cerr << "Failed to connect to matchmaking server." << std::endl;
                 enet_host_destroy(self);
                 return;
             }

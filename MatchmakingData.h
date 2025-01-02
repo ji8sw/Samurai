@@ -1,6 +1,7 @@
 #pragma once
 #include <random>
 
+
 namespace Samurai
 {
     namespace Matchmaking
@@ -16,7 +17,6 @@ namespace Samurai
         {
             inSession,
             noSession,
-            waitingToHostNewSession, // similair to waitingForSessionInfo but for our own sessions
             waitingForSessionInfo,
             joiningSession
         };
@@ -33,10 +33,12 @@ namespace Samurai
             ENetPeer* connection = nullptr;
             ENetAddress address;
             bool isHost = false;
+            int sessionId = 0;
 
-            // used in client settings when connecting to other players
+            // used mostly in client settings when connecting to other players
             bool isPlayer = false;
             bool connected = false;
+            bool connecting = false;
             bool shouldDisconnect = false;
 
             playerConnectionInfo(const char* Address, enet_uint16 Port)
@@ -72,6 +74,7 @@ namespace Samurai
         {
             short maxPlayers = 30;
             std::vector<playerConnectionInfo> playerList;
+            std::vector<ENetAddress> inviteList;
             playerConnectionInfo host;
             bool advertise = true; // is this session public? should it be advertised to players looking to join?
             bool waitForHost = true; // session is newly created, has no players because the host hasnt joined yet, dont destroy it
@@ -92,9 +95,22 @@ namespace Samurai
             {
                 for (int pid = 0; pid < playerList.size(); pid++)
                 {
-                    if (playerList[pid].address.host == host.address.host)
+                    if (host.address.host == playerList[pid].address.host && host.address.port == playerList[pid].address.port)
                         return pid;
                 }
+
+                return -1;
+            }
+
+            int getPidFromAddress(ENetAddress addr)
+            {
+                for (int pid = 0; pid < playerList.size(); pid++)
+                {
+                    if (addr.host == playerList[pid].address.host && addr.port == playerList[pid].address.port)
+                        return pid;
+                }
+
+                return -1;
             }
 
             sessionData(playerConnectionInfo Host, short MaxPlayers = 30) : host(Host), maxPlayers(MaxPlayers)

@@ -19,7 +19,10 @@ namespace Samurai
         REQUEST_DENIED_MESSAGE,
         PROVIDE_QUICK_RESPONSE,
         PROVIDE_QUICK_RESPONSE_MESSAGE,
-        P2P_CHAT_MESSAGE
+        P2P_CHAT_MESSAGE,
+        REQUEST_SEND_INVITE,
+        PROVIDE_INVITE,
+        PLAYER_LEFT
     };
 
     enum PacketDeniedReason
@@ -33,7 +36,8 @@ namespace Samurai
         SESSION_CREATED_SUCCESS, // unused
         SESSION_JOINED_SUCCESS,
         SESSION_JOINED_FAILURE,
-        PLAYER_JOINED
+        SESSION_FIND_FAILURE,
+        NOTIFY_LEAVE_SESSION
     };
 
     struct Packet
@@ -258,5 +262,10 @@ namespace Samurai
             << static_cast<int>(byte1);
 
         return ipString.str();
+    }
+
+    bool areAdderessesMatching(ENetAddress addrA, ENetAddress addrB)
+    {
+        return addrA.host == addrB.host && addrA.host == addrB.port;
     }
 }
