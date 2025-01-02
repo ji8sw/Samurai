@@ -7,18 +7,24 @@ Included is an example P2P chat system, where messages are broadcasted using the
 Samurai uses ENet, a library that allows you to connect via IP addresses and send data, however the data is sent in raw bytes, but Samurai allows you to create a list of bytes based on types. Samurai has a packet system, a packet contains an `int` for its type, which could be any of:
 
     enum PacketType
-        {
-            REQUEST_CREATE_SESSION,
-            PROVIDE_SESSION_DETAILS,
-            REQUEST_FIND_SESSION,
-            PROVIDE_JOINER_INFO,
-            REQUEST_JOIN_SESSION,
-            REQUEST_DENIED,
-            REQUEST_DENIED_MESSAGE,
-            PROVIDE_QUICK_RESPONSE,
-            PROVIDE_QUICK_RESPONSE_MESSAGE,
-            P2P_CHAT_MESSAGE
-        };
+    {
+        // Core
+        PROVIDE_QUICK_RESPONSE,
+        PROVIDE_QUICK_RESPONSE_MESSAGE,
+
+        // Matchmaking
+        REQUEST_CREATE_SESSION,
+        PROVIDE_SESSION_DETAILS,
+        REQUEST_FIND_SESSION,
+        PROVIDE_JOINER_INFO,
+        REQUEST_JOIN_SESSION,
+        REQUEST_SEND_INVITE,
+        PROVIDE_INVITE,
+        PLAYER_LEFT,
+
+        // P2P
+        P2P_CHAT_MESSAGE
+    };
 and then a list of bytes, the list of bytes can be appended and extracted with included helper functions, these include:
 `appendInt / extractInt`
 `appendUInt32 / extractUInt32`
@@ -30,7 +36,7 @@ you can always add more, even combining these previous functions to support a st
 Packets can be sent very easily using these functions:
 `sendNow` sends packet to a specific peer
 `sendBroadcastNow` sends packet to a list of peers
-there are some other helper functions for different kinds of packets like request failures (like `JOIN_NOT_ALLOWED`) or quick responses (like `PLAYER_JOINED`)
+there are some other helper functions for different kinds of packets like quick responses which should contain no data.
 
 It might seem limited, this is because it only contains what is used in Samurai, much more can be added and fondled with.
 

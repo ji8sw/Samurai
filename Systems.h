@@ -111,8 +111,14 @@ namespace Samurai
             server = enet_host_create(&address, 30, 2, 0, 0);
             if (server == nullptr)
             {
-                std::cerr << "An error occurred while trying to create an ENet server." << std::endl;
-                return;
+                std::cerr << "An error occurred while trying to create an ENet server, trying alternative port" << std::endl;
+                address.port = port + 100;
+                server = enet_host_create(&address, 5, 2, 0, 0);
+                if (server == nullptr)
+                {
+                    std::cerr << "Alternative port failed, quitting" << std::endl;
+                    return;
+                }
             }
 
             std::cout << "Matchmaking server is now running on port " << address.port << "\n\n";
@@ -178,7 +184,7 @@ namespace Samurai
                                 
                                 if (requestedSessionIndex == INVALID_INT)
                                 {
-                                    sendRequestDeniedNow(event.peer, INVALID_SESSION_ID);
+                                    sendQuickResponseNow(event.peer, INVALID_SESSION_ID);
                                     std::cerr << "Failed to join session.\n\n";
                                     continue;
                                     break;
@@ -233,7 +239,7 @@ namespace Samurai
                                     
                                     if (!joinAllowed)
                                     {
-                                        sendRequestDeniedNow(event.peer, JOIN_NOT_ALLOWED);
+                                        sendQuickResponseNow(event.peer, JOIN_NOT_ALLOWED);
                                     }
                                 }
 
@@ -483,7 +489,7 @@ namespace Samurai
                     sendNow(packet, matchmakingHost);
                     state = waitingForSessionInfo;
                 }
-                else if (input == "join_session") 
+                else if (input == "join_session")
                 {
                     if (state == inSession)
                     {
@@ -571,19 +577,22 @@ namespace Samurai
                     {
                     case ENET_EVENT_TYPE_CONNECT:
                     {
-                        for (Matchmaking::playerConnectionInfo& info : knownPlayerInfos)
+                        if (event.peer->incomingPeerID != -1) // it is an incoming connection
                         {
-                            if (info.matches(event.peer->address))
+                            for (Matchmaking::playerConnectionInfo& info : knownPlayerInfos)
                             {
-                                if (!info.connected)
+                                if (info.matches(event.peer->address))
                                 {
-                                    info.isPlayer = true;
-                                    info.connected = true;
-                                    info.connection = event.peer;
-                                    info.connecting = false;
-                                    std::cout << "Successfully connected to player at " << ipToString(info.address.host) << ":" << info.address.port << "!\n";
+                                    if (!info.connected)
+                                    {
+                                        info.isPlayer = true;
+                                        info.connected = true;
+                                        info.connection = event.peer;
+                                        info.connecting = false;
+                                        std::cout << "Successfully connected to player at " << ipToString(info.address.host) << ":" << info.address.port << "!\n";
+                                    }
+                                    break;
                                 }
-                                break;
                             }
                         }
                         break;
@@ -630,8 +639,6 @@ namespace Samurai
                         }
                         case PROVIDE_QUICK_RESPONSE:
                         {
-                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                            size_t offset = 0;
                             QuickResponseType Type = (QuickResponseType)extractInt(packet.data, offset);
 
                             switch (Type)
@@ -664,6 +671,16 @@ namespace Samurai
                                 }
                                 break;
                             }
+                            case INVALID_SESSION_ID:
+                            {
+                                std::cout << "The session you tried to join no longer exists or is invalid\n\n";
+                                break;
+                            }
+                            case JOIN_NOT_ALLOWED:
+                            {
+                                std::cout << "The session you tried to join is private\n\n";
+                                break;
+                            }
                             default:
                             {
                                 std::cout << "Got quick response: " << Type << "\n\n";
@@ -674,8 +691,6 @@ namespace Samurai
                         }
                         case PROVIDE_JOINER_INFO:
                         {
-                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                            size_t offset = 0;
                             ENetAddress addr = extractAddress(packet.data, offset);
 
                             Matchmaking::playerConnectionInfo newInfo(addr);
@@ -687,8 +702,6 @@ namespace Samurai
                         }
                         case PLAYER_LEFT:
                         {
-                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                            size_t offset = 0;
                             ENetAddress addr = extractAddress(packet.data, offset); // addr of person who left
 
                             if (!areAdderessesMatching(addr, self->address))
@@ -706,36 +719,8 @@ namespace Samurai
                         }
                         case PROVIDE_QUICK_RESPONSE_MESSAGE:
                         {
-                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                            size_t offset = 0;
                             std::string message = extractString(packet.data, offset);
                             std::cout << "Got quick response message: " << message << "\n\n";
-                            break;
-                        }
-                        case REQUEST_DENIED:
-                        {
-                            Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                            size_t offset = 0;
-                            PacketDeniedReason Type = (PacketDeniedReason)extractInt(packet.data, offset);
-
-                            switch (Type)
-                            {
-                            case INVALID_SESSION_ID:
-                            {
-                                std::cout << "The session you tried to join no longer exists or is invalid\n\n";
-                                break;
-                            }
-                            case JOIN_NOT_ALLOWED:
-                            {
-                                std::cout << "The session you tried to join is private\n\n";
-                                break;
-                            }
-                            default:
-                            {
-                                std::cout << "A request was denied, reason type: " << Type << "\n\n";
-                                break;
-                            }
-                            }
                             break;
                         }
                         case P2P_CHAT_MESSAGE:
@@ -752,14 +737,6 @@ namespace Samurai
                         }
 
                         enet_packet_destroy(event.packet);
-                        break;
-                    }
-                    case REQUEST_DENIED_MESSAGE:
-                    {
-                        Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
-                        size_t offset = 0;
-                        std::string message = extractString(packet.data, offset);
-                        std::cout << "A response was denied, reason: " << message << "\n\n";
                         break;
                     }
                     case ENET_EVENT_TYPE_DISCONNECT:
@@ -820,8 +797,14 @@ namespace Samurai
             self = enet_host_create(&localAddress, 30, 1, 0, 0);
             if (self == nullptr)
             {
-                std::cerr << "An error occurred while trying to create the ENet self." << std::endl;
-                return;
+                std::cerr << "An error occurred while trying to create an ENet server, trying alternative port" << std::endl;
+                localAddress.port = port + 100;
+                self = enet_host_create(&localAddress, 5, 2, 0, 0);
+                if (self == nullptr)
+                {
+                    std::cerr << "Alternative port failed, quitting" << std::endl;
+                    return;
+                }
             }
 
             // Connect to the server

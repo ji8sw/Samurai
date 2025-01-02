@@ -8,36 +8,36 @@
 
 namespace Samurai
 {
-    enum PacketType
+    enum PacketType// used in cases when you want to send data, on the receiving side you can use the PacketType to identify what data should be expected in the receieved packet
     {
+        // Core
+        PROVIDE_QUICK_RESPONSE,
+        PROVIDE_QUICK_RESPONSE_MESSAGE,
+
+        // Matchmaking
         REQUEST_CREATE_SESSION,
         PROVIDE_SESSION_DETAILS,
         REQUEST_FIND_SESSION,
         PROVIDE_JOINER_INFO,
         REQUEST_JOIN_SESSION,
-        REQUEST_DENIED,
-        REQUEST_DENIED_MESSAGE,
-        PROVIDE_QUICK_RESPONSE,
-        PROVIDE_QUICK_RESPONSE_MESSAGE,
-        P2P_CHAT_MESSAGE,
         REQUEST_SEND_INVITE,
         PROVIDE_INVITE,
-        PLAYER_LEFT
+        PLAYER_LEFT,
+
+        // P2P
+        P2P_CHAT_MESSAGE
     };
 
-    enum PacketDeniedReason
+    enum QuickResponseType  // used in cases when you dont want to send extra data, helper functions exist for sending these easily
     {
-        INVALID_SESSION_ID,
-        JOIN_NOT_ALLOWED
-    };
-
-    enum QuickResponseType
-    {
-        SESSION_CREATED_SUCCESS, // unused
+        // Matchmaking
+        SESSION_CREATED_SUCCESS,
         SESSION_JOINED_SUCCESS,
         SESSION_JOINED_FAILURE,
         SESSION_FIND_FAILURE,
-        NOTIFY_LEAVE_SESSION
+        NOTIFY_LEAVE_SESSION,
+        INVALID_SESSION_ID,
+        JOIN_NOT_ALLOWED
     };
 
     struct Packet
@@ -169,7 +169,7 @@ namespace Samurai
 
     void sendBroadcastNow(Matchmaking::sessionData session, Packet& packet, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
     {
-        if (session.playerList.size() == 0) return;
+        if (session.playerList.empty()) return;
         for (Matchmaking::playerConnectionInfo connection : session.playerList)
         {
             if (!connection.connection) continue;
@@ -179,30 +179,12 @@ namespace Samurai
 
     void sendBroadcastNow(std::vector<Matchmaking::playerConnectionInfo> infos, Packet& packet, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
     {
-        if (infos.size() == 0) return;
+        if (infos.empty()) return;
         for (Matchmaking::playerConnectionInfo connection : infos)
         {
             if (!connection.connection) continue;
             sendNow(packet, connection.connection, Flag);
         }
-    }
-
-    void sendRequestDeniedNow(ENetPeer* Client, PacketDeniedReason Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
-    {
-        Packet packet;
-        packet.type = REQUEST_DENIED;
-        
-        appendInt(packet.data, Reason);
-        sendNow(packet, Client, Flag);
-    }
-
-    void sendRequestDeniedMessageNow(ENetPeer* Client, std::string Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
-    {
-        Packet packet;
-        packet.type = REQUEST_DENIED_MESSAGE;
-
-        appendString(packet.data, Reason);
-        sendNow(packet, Client, Flag);
     }
 
     void sendQuickResponseNow(ENetPeer* Client, QuickResponseType Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
@@ -216,7 +198,7 @@ namespace Samurai
 
     void sendBroadcastQuickResponseNow(Matchmaking::sessionData session, QuickResponseType Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
     {
-        if (session.playerList.size() == 0) return;
+        if (session.playerList.empty()) return;
 
         for (Matchmaking::playerConnectionInfo connection : session.playerList)
         {
@@ -232,7 +214,7 @@ namespace Samurai
 
     void sendBroadcastQuickResponseMessageNow(Matchmaking::sessionData session, std::string Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
     {
-        if (session.playerList.size() == 0) return;
+        if (session.playerList.empty()) return;
 
         for (Matchmaking::playerConnectionInfo connection : session.playerList)
         {
@@ -243,6 +225,38 @@ namespace Samurai
 
             appendString(packet.data, Reason);
             sendNow(packet, connection.connection, Flag);
+        }
+    }
+
+    void sendBroadcastQuickResponseNow(std::vector<ENetPeer*> connections, QuickResponseType Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
+    {
+        if (connections.empty()) return;
+
+        for (ENetPeer* connection : connections)
+        {
+            if (!connection) continue;
+
+            Packet packet;
+            packet.type = PROVIDE_QUICK_RESPONSE;
+
+            appendInt(packet.data, Reason);
+            sendNow(packet, connection, Flag);
+        }
+    }
+
+    void sendBroadcastQuickResponseMessageNow(std::vector<ENetPeer*> connections, std::string Reason, ENetPacketFlag Flag = ENET_PACKET_FLAG_RELIABLE)
+    {
+        if (connections.empty()) return;
+
+        for (ENetPeer* connection : connections)
+        {
+            if (!connection) continue;
+
+            Packet packet;
+            packet.type = PROVIDE_QUICK_RESPONSE_MESSAGE;
+
+            appendString(packet.data, Reason);
+            sendNow(packet, connection, Flag);
         }
     }
 

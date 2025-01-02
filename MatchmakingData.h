@@ -88,7 +88,7 @@ namespace Samurai
 
             bool shouldBeDestroyed()
             {
-                return playerList.size() == 0 && !waitForHost;
+                return playerList.empty() && !waitForHost;
             }
 
             int getHostPid()
