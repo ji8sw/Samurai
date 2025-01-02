@@ -1,7 +1,9 @@
-#include "enet/enet.h"
 #include <iostream>
 #include "string"
 #include "thread"
+
+#include "enet/enet.h"
+#include "PacketHelper.h"
 
 namespace Samurai
 {
@@ -9,6 +11,8 @@ namespace Samurai
 	{
 	public:
 		mutable bool isClient = true;
+        mutable int port = 1000;
+        mutable int targetPort = 1000;
 
 		networkSystem(bool IsClient = true) : isClient(IsClient)
 		{
@@ -18,17 +22,17 @@ namespace Samurai
         virtual void start() = 0;
 	};
 
-	class serverSystem : public networkSystem
+	class clientSystem : public networkSystem
 	{
 	public:
-        serverSystem()
+        clientSystem()
         {
             isClient = false;
         }
 
         void start() override
         {		
-            ENetHost* server;
+            ENetHost* self;
             ENetAddress address;
 
             // Initialize ENet
@@ -39,166 +43,126 @@ namespace Samurai
             }
             atexit(enet_deinitialize);
 
-            // Set up the address for the server (host IP and port)
+            // Set up the address for ourselves (host IP and port)
             enet_address_set_host(&address, "0.0.0.0");  // Listen on all available interfaces
-            address.port = 1000;
+            address.port = port;
 
-            // Create the server (maximum 32 clients, 2 channels)
-            server = enet_host_create(&address, 32, 2, 0, 0);
-            if (server == nullptr) 
+            // Create the server (maximum 5 connections, 2 channels)
+            self = enet_host_create(&address, 5, 2, 0, 0);
+            if (self == nullptr)
             {
-                std::cerr << "An error occurred while trying to create an ENet server." << std::endl;
-                return;
+                std::cerr << "An error occurred while trying to create an ENet server, trying alternative port" << std::endl;
+                address.port = port + 100;
+                self = enet_host_create(&address, 5, 2, 0, 0);
+                if (self == nullptr)
+                {
+                    std::cerr << "Alternative port failed, quitting" << std::endl;
+                    return;
+                }
             }
 
-            std::cout << "Server is now running on port " << address.port << std::endl;
+            std::cout << "We are now listening at " << ipToString(address.host) << ":" << address.port << std::endl;
+
+            std::string input;
+            std::cout << "Target Port > ";
+            std::getline(std::cin, input);
+
+            try
+            {
+                targetPort = std::stoi(input);
+            }
+            catch (...) { targetPort = 1000; }
+
+            // connect to target
+            ENetAddress targetAddr;
+            enet_address_set_host(&targetAddr, "127.0.0.1");
+            targetAddr.port = targetPort;
+            enet_host_connect(self, &targetAddr, 2, 0);
 
             // Main server loop
             while (true) 
             {
                 ENetEvent event;
-                while (enet_host_service(server, &event, 1000) > 0) 
+                while (enet_host_service(self, &event, 1000) > 0)
                 {
                     switch (event.type) 
                     {
                     case ENET_EVENT_TYPE_CONNECT:
-                        std::cout << "A new client connected from " << event.peer->address.host << std::endl;
-                        break;
-
-                    case ENET_EVENT_TYPE_RECEIVE:
-                        std::cout << "Packet received from client: " << event.packet->data << std::endl;
-                        // Handle received data
-                        enet_packet_destroy(event.packet);
-                        break;
-
-                    case ENET_EVENT_TYPE_DISCONNECT:
-                        std::cout << "Client disconnected." << std::endl;
-                        break;
-                    }
-                }
-            }
-
-            enet_host_destroy(server);
-		}
-	};
-
-    class clientSystem : public networkSystem
-    {
-    public:
-        clientSystem()
-        {
-            isClient = true;
-        }
-
-        void start() override
-        {
-            ENetHost* client;
-            ENetAddress address;
-            ENetPeer* peer;
-
-            // Initialize ENet
-            if (enet_initialize() != 0) 
-            {
-                std::cerr << "An error occurred while initializing ENet." << std::endl;
-                return;
-            }
-            atexit(enet_deinitialize);
-
-            // Set up the server's address (IP and port)
-            enet_address_set_host(&address, "127.0.0.1"); // Use your server's IP address here
-            address.port = 1000;
-
-            // Create the client (1 channel)
-            client = enet_host_create(nullptr, 1, 1, 0, 0);
-            if (client == nullptr) 
-            {
-                std::cerr << "An error occurred while trying to create the ENet client." << std::endl;
-                return;
-            }
-
-            // Connect to the server
-            peer = enet_host_connect(client, &address, 2, 0);
-            if (peer == nullptr) 
-            {
-                std::cerr << "No available peers for initiating an ENet connection." << std::endl;
-                return;
-            }
-
-            // Wait for the connection to be established
-            ENetEvent event;
-            if (enet_host_service(client, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT) 
-            {
-                std::cout << "Successfully connected to server!" << std::endl;
-            }
-            else 
-            {
-                std::cerr << "Failed to connect to server." << std::endl;
-                enet_host_destroy(client);
-                return;
-            }
-
-            // Main client loop
-            while (true) 
-            {
-                // Handle events (incoming messages, disconnects, etc.)
-                while (enet_host_service(client, &event, 1000) > 0) 
-                {
-                    switch (event.type) 
                     {
-                    case ENET_EVENT_TYPE_CONNECT:
-                        std::cout << "Successfully connected to server!" << std::endl;
-                        break;
+                        if (event.peer->incomingPeerID != -1) // it is an incoming connection
+                        {
+                            std::cout << "A new client connected from " << ipToString(address.host) << ":" << address.port << std::endl;
 
+                            // send them a welcome message when we connect
+                            // create the packet and assign its type
+                            Packet packet;
+                            packet.type = PROVIDE_WELCOME_MESSAGE;
+
+                            // give it the welcome message
+                            appendString(packet.data, "hey partner!");
+
+                            // send it to the new connection
+                            sendNow(packet, event.peer);
+                        }
+                        break;
+                    }
                     case ENET_EVENT_TYPE_RECEIVE:
-                        std::cout << "Packet received from server: " << event.packet->data << std::endl;
-                        // Handle received data
+                    {
+                        Packet packet = Packet::deserialize((char*)event.packet->data, event.packet->dataLength);
+                        size_t offset = 0;
+
+                        switch (packet.type)
+                        {
+                        case PROVIDE_WELCOME_MESSAGE:
+                        {
+                            std::string welcomeMessage = extractString(packet.data, offset); // we know its a welcome message so we can expect to find a string
+                            std::cout << ipToString(event.peer->address.host) << ":" << event.peer->address.port << " has welcomed us: " << welcomeMessage << "\n\n";
+
+                            sendQuickResponseNow(event.peer, ACK_WELCOME_MESSAGE); // send a quick response (no data) acknoledging that we recieved it
+                            break;
+                        }
+                        case PROVIDE_QUICK_RESPONSE:
+                        {
+                            QuickResponseType type = (QuickResponseType)extractInt(packet.data, offset); // quick responses should always have their type
+                            switch (type)
+                            {
+                            case ACK_WELCOME_MESSAGE:
+                            {
+                                std::cout << ipToString(event.peer->address.host) << ":" << event.peer->address.port << " has recieved our welcome message!" << "\n\n";
+                            }
+                            }
+                            break;
+                        }
+                        default:
+                        {
+                            std::cout << "A request was recieved but not handled, type: " << packet.type << "\n\n";
+                            break;
+                        }
+                        }
+
                         enet_packet_destroy(event.packet);
                         break;
-
+                    }
                     case ENET_EVENT_TYPE_DISCONNECT:
-                        std::cout << "Server disconnected." << std::endl;
-                        return;
+                        std::cout << "A peer has disconnected." << std::endl;
+                        break;
                     }
                 }
-
-                // Send a simple packet to the server every second
-                const char* message = "Hello from client!";
-                ENetPacket* packet = enet_packet_create(message, strlen(message) + 1, ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(peer, 0, packet);
-                enet_host_flush(client);
 
                 // Sleep for 1 second
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
 
-            enet_host_destroy(client);
-        }
-    };
+            enet_host_destroy(self);
+		}
+	};
 }
 
 int main(int ArgumentCount, char* Arguments[])
 {
-	Samurai::networkSystem* System = nullptr;
+    Samurai::networkSystem* System = nullptr;
 
-	if (ArgumentCount >= 1)
-	{
-        for (int ArgumentIndex = 0; ArgumentIndex < ArgumentCount; ArgumentIndex++)
-        {
-            if (!System && std::string(Arguments[ArgumentIndex]) == "-Server")
-            {
-                System = new Samurai::serverSystem;
-                System->isClient = false;
-                System->start();
-            }
-        }
-	}
-
-    if (!System)
-    {
-        System = new Samurai::clientSystem;
-        System->isClient = true;
-        System->start();
-    }
-
-	return 1;
+    System = new Samurai::clientSystem;
+    System->isClient = true;
+    System->start();
 }
