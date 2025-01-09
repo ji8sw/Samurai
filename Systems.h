@@ -167,6 +167,7 @@ namespace Samurai
                                 packet.type = PROVIDE_SESSION_DETAILS;
 
                                 appendInt(packet.data, NewSession.id); // session id
+                                appendInt(packet.data, true); // is the person we're sending this to, the host?
                                 appendInt(packet.data, 0); // player count, we know theres no players to connect to
                                 appendInt(packet.data, 0); // host pid
                                 // no need to provide player connection info if theres no players
@@ -265,6 +266,7 @@ namespace Samurai
                                         packet.type = PROVIDE_SESSION_DETAILS;
 
                                         appendInt(packet.data, Data->id); // session id
+                                        appendInt(packet.data, Data->host.matches(event.peer->address)); // is the person we're sending this to, the host?
                                         appendInt(packet.data, Data->playerList.size()); // player count, we know theres no players to connect to
                                         appendInt(packet.data, Data->getHostPid()); // host pid
 
@@ -282,31 +284,91 @@ namespace Samurai
                                 sendQuickResponseNow(event.peer, SESSION_FIND_FAILURE);
                                 break;
                             }
-                            case REQUEST_SEND_INVITE:
+                            case REQUEST_FIND_SESSION_BY_ID:
                             {
-                                ENetAddress target = extractAddress(incoming.data, offset);
-                                int sessionId = findSessionIndexByMemberAddress(event.peer->address);
-                                int targetConnectionIndex = findPeerIndexByAddress(target);
-
-                                if (targetConnectionIndex != INVALID_INT) // is the player connected to matchmaking at all?
+                                std::cout << "Received REQUEST_FIND_SESSION_BY_ID, finding session\n";
+                                int tryingToJoin = extractInt(incoming.data, offset);
+                                int sessionIndex = findSessionIndexById(tryingToJoin);
+                                if (sessionIndex != INVALID_INT)
                                 {
-                                    ENetPeer* targetConnection = allConnections[targetConnectionIndex];
+                                    sessionData* Data = &sessionList[sessionIndex];
 
-                                    int targetSessionIndex = findSessionIndexByMemberAddress(event.peer->address);
-                                    int targetSessionId = INVALID_INT;
-                                    if (targetSessionIndex != INVALID_INT)
-                                        targetSessionId = sessionList[targetSessionIndex].id;
-
-                                    // ensure we arent inviting the target to the session theyre already in
-                                    if (targetSessionId == INVALID_INT || targetSessionId != sessionId)
+                                    if (!Data->isFull() && !Data->shouldBeDestroyed() && !Data->inviteList.empty())
                                     {
-                                        // send invite and the session id that they are invited to
-                                        Packet packet;
-                                        packet.type = PROVIDE_INVITE;
-                                        appendInt(packet.data, sessionId); // session id
-                                        sendNow(packet, targetConnection);
+                                        int index = Data->inviteList.size();
+                                        while (index--)
+                                        {
+                                            if (areAdderessesMatching(event.peer->address, Data->inviteList[index]))
+                                            {
+                                                Data->inviteList.erase(Data->inviteList.begin() + index);
+
+                                                std::cout << "Successfully found session, ID: " << Data->id << "\n\n";
+
+                                                // send the session id back to the requester so they can request to join the id
+                                                Packet packet;
+                                                packet.type = PROVIDE_SESSION_DETAILS;
+
+                                                appendInt(packet.data, Data->id); // session id
+                                                appendInt(packet.data, Data->host.matches(event.peer->address)); // is the person we're sending this to, the host?
+                                                appendInt(packet.data, Data->playerList.size()); // player count, we know theres no players to connect to
+                                                appendInt(packet.data, Data->getHostPid()); // host pid
+
+                                                for (playerConnectionInfo& connectionInfo : Data->playerList)
+                                                {
+                                                    appendAddress(packet.data, connectionInfo.address);
+                                                }
+
+                                                sendNow(packet, event.peer);
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
+
+                                // didnt find any session
+                                sendQuickResponseNow(event.peer, SESSION_FIND_FAILURE);
+                                break;
+                            }
+                            case REQUEST_SEND_INVITE:
+                            {
+                                std::cout << "Received REQUEST_SEND_INVITE, sending...\n";
+                                ENetAddress target = extractAddress(incoming.data, offset);
+                                std::cout << ipToString(target.host) << ":" << target.port << std::endl;
+                                int sessionIndex = findSessionIndexByMemberAddress(event.peer->address); // session as an array element
+                                if (sessionIndex != INVALID_INT)
+                                {
+                                    int sessionId = sessionList[sessionIndex].id; // session as an identifier
+                                    int targetConnectionIndex = findPeerIndexByAddress(target); // connection info of the target as an array element
+
+                                    if (targetConnectionIndex != INVALID_INT) // is the player connected to matchmaking at all?
+                                    {
+                                        ENetPeer* targetConnection = allConnections[targetConnectionIndex];
+
+                                        int targetSessionIndex = findSessionIndexByMemberAddress(target); // session target is in as an array element
+                                        int targetSessionId = INVALID_INT; // session target is in as an identifier
+                                        std::cout << "index: " << targetSessionIndex << "\nlength: " << sessionList.size() - 1 << "\n";
+                                        if (targetSessionIndex != INVALID_INT)
+                                        {
+                                            std::cout << "target is in a session getting it now\n";
+                                            targetSessionId = sessionList[targetSessionIndex].id;
+                                        }
+
+                                        // ensure we arent inviting the target to the session theyre already in
+                                        if (targetSessionId == INVALID_INT || targetSessionId != sessionId) // not in a session or not in the destination session
+                                        {
+                                            // send invite and the session id that they are invited to
+                                            Packet packet;
+                                            packet.type = PROVIDE_INVITE;
+                                            appendInt(packet.data, sessionId); // session id
+                                            sendNow(packet, targetConnection);
+                                            sessionList[sessionIndex].inviteList.push_back(targetConnection->address); // add them to invite list
+                                            std::cout << "Sent invite.\n";
+                                        }
+                                        else std::cout << "Reciever is already in the destination session...\n";
+                                    }
+                                    else std::cout << "Reciever is not connected to matchmaking...\n";
+                                }
+                                else std::cout << "Sender is not in a session...\n";
                                 break;
                             }
                             case PROVIDE_QUICK_RESPONSE:
@@ -346,7 +408,6 @@ namespace Samurai
                         }
                         break;
                     }
-
                     case ENET_EVENT_TYPE_DISCONNECT:
                     {
                         int connectionIndex = findPeerIndexByAddress(event.peer->address);
@@ -389,8 +450,9 @@ namespace Samurai
         int sessionId = 0;
         bool isHost = true;
         std::vector<Matchmaking::playerConnectionInfo> knownPlayerInfos;
-
         std::atomic<bool> running = true;
+
+        std::vector<int> inviteIds; // list of session ids we have been invited to
 
         clientSystem()
         {
@@ -611,6 +673,7 @@ namespace Samurai
                             case waitingForSessionInfo:
                             {
                                 sessionId = extractInt(packet.data, offset); // session id
+                                isHost = extractInt(packet.data, offset); // am i the host of this session, todo: add extractBool
                                 int count = extractInt(packet.data, offset); // player count
                                 int hostId = extractInt(packet.data, offset); // host id
 
@@ -727,6 +790,13 @@ namespace Samurai
                         {
                             std::string message = extractString(packet.data, offset);
                             std::cout << ipToString(event.peer->address.host) << ":" << event.peer->address.port << " says: " << message << "\n\n";
+                            break;
+                        }
+                        case PROVIDE_INVITE:
+                        {
+                            int invitedToSessionId = extractInt(packet.data, offset);
+                            inviteIds.push_back(invitedToSessionId);
+                            std::cout << "Someone has sent you an invite, session ID: " << invitedToSessionId << "\n\n";
                             break;
                         }
                         default:
