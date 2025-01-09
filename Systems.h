@@ -9,6 +9,8 @@
 #include "PacketHelper.h"
 #include "GUIHelper.h"
 
+#define MAX_CONNECTION_ATTEMPTS 5
+
 namespace Samurai
 {
     using namespace Matchmaking;
@@ -448,13 +450,14 @@ namespace Samurai
     public:
         ENetHost* self = nullptr;
         ENetPeer* matchmakingHost = nullptr;
+        std::atomic<bool> connectedToMatchmaking = false;
         clientJoinState state = noSession;
-        int sessionId = 0;
-        bool isHost = true;
+        std::atomic<int> sessionId = 0;
+        std::atomic<bool> isHost = true;
         std::vector<Matchmaking::playerConnectionInfo> knownPlayerInfos;
         std::atomic<bool> running = true;
 
-        bool guiInitialized = false;
+        std::atomic<bool> guiInitialized = false;
         std::deque<std::string> chatHistory;
         std::string chatInput = "";
 
@@ -465,8 +468,39 @@ namespace Samurai
             isClient = true;
         }
 
+        void tryConnectToMatchmaking()
+        {
+            // servers address (IP and port)
+            ENetAddress serverAddress;
+            enet_address_set_host(&serverAddress, "127.0.0.1");
+            serverAddress.port = 1000;
+
+            // Connect to the server
+            matchmakingHost = enet_host_connect(self, &serverAddress, 2, 0);
+            if (matchmakingHost == nullptr)
+            {
+                std::cerr << "No available peers for initiating an ENet connection." << std::endl;
+                return;
+            }
+
+            // Wait for the connection to be established
+            ENetEvent event;
+            if (enet_host_service(self, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
+            {
+                std::cout << "Successfully connected to matchmaking server!" << "\n\n";
+                connectedToMatchmaking = true;
+            }
+            else
+            {
+                std::cerr << "Failed to connect to matchmaking server." << std::endl;
+                enet_host_destroy(self);
+                return;
+            }
+        }
+
         int playerIndexByAddress(ENetAddress addr)
         {
+            
             for (int pid = 0; pid < knownPlayerInfos.size(); pid++)
             {
                 if (knownPlayerInfos[pid].matches(addr))
@@ -488,7 +522,7 @@ namespace Samurai
                     info.shouldDisconnect = true;
                 }
 
-                knownPlayerInfos.clear();
+                while (!knownPlayerInfos.empty()); // wait for all connections to be discontinued
 
                 Packet leaveMessage;
                 leaveMessage.type = NOTIFY_LEAVE_SESSION;
@@ -516,188 +550,191 @@ namespace Samurai
             }
         }
 
-        void tickGUI()
+        void guiLoop()
         {
-            if (!guiInitialized) return;
-            if (!Samurai::GUI::standardFrameStart()) { running = false; return; }
-
-            ImGui::Begin("Connection Details");
-
-            ImGui::Text(std::string("Current State: " + stateToString()).c_str());
-
-            if (state == inSession)
+            while (running)
             {
-                ImGui::Separator();
-                ImGui::Text("Current Session Details");
-
-                std::string sessionIdStr = std::to_string(sessionId);
-                ImGui::Text(std::string("Session ID: " + sessionIdStr).c_str());
-
-                std::string isHostStr = isHost == true ? "Yes" : "No";
-                ImGui::Text(std::string("Is Host: " + isHostStr).c_str());
-
-                std::string playerCountStr = std::to_string(knownPlayerInfos.size() + 1); // add one to include ourselves
-                ImGui::Text(std::string("Players: " + playerCountStr).c_str());
-
-                if (state == inSession && ImGui::Button("Leave Session"))
+                // Create a window and initialize glfw ready for the system to render to
+                if (!guiInitialized && !Samurai::GUI::initialize())
                 {
-                    leaveSession();
-                    std::cout << "Leaving session...\n\n";
+                    std::cout << "Failed to initialize GUI..." << std::endl;
+                    return;
                 }
-            }
-            else if (state == noSession)
-            {
-                ImGui::Separator();
-                if (ImGui::Button("Find A Session"))
+                guiInitialized = true;
+                if (!Samurai::GUI::standardFrameStart()) { running = false; return; }
+
+                if (!connectedToMatchmaking)
                 {
-                    std::cout << "Requesting session join info\n\n";
-                    Packet packet;
-                    packet.type = REQUEST_FIND_SESSION;
-                    sendNow(packet, matchmakingHost);
-                    state = waitingForSessionInfo;
+                    ImGui::Begin("Loading...");
+                    ImGui::Text("Connecting to matchmaking...");
+                    ImGui::End();
+                    tryConnectToMatchmaking();
+                    Samurai::GUI::standardFrameEnd();
+                    continue;
                 }
 
-                ImGui::Separator();
-                
-                static int maxPlayers = 30;
-                ImGui::Text("Max Players"); ImGui::SameLine();
-                ImGui::InputInt("##maxplys", &maxPlayers);
+                ImGui::Begin("Connection Details");
 
-                static int joinability = (int)allowAny;
-                ImGui::Text("Joinability"); ImGui::SameLine();
-                ImGui::Combo("##joinability", &joinability, joinabilityStrings, IM_ARRAYSIZE(joinabilityStrings));
+                ImGui::Text(std::string("Current State: " + stateToString()).c_str());
 
-                if (ImGui::Button("Create A Session"))
+                if (state == inSession)
                 {
-                    std::cout << "Requesting session creation.\n\n";
-                    Packet packet;
-                    packet.type = REQUEST_CREATE_SESSION;
-                    appendInt(packet.data, maxPlayers);
-                    appendInt(packet.data, joinability);
-                    sendNow(packet, matchmakingHost);
-                    state = waitingForSessionInfo;
-                }
-            }
+                    ImGui::Separator();
+                    ImGui::Text("Current Session Details");
 
-            ImGui::End();
+                    std::string sessionIdStr = std::to_string(sessionId);
+                    ImGui::Text(std::string("Session ID: " + sessionIdStr).c_str());
 
-            ImGui::Begin("Chat");
+                    std::string isHostStr = isHost == true ? "Yes" : "No";
+                    ImGui::Text(std::string("Is Host: " + isHostStr).c_str());
 
-            if (state == inSession)
-            {
-                ImGui::InputText("", &chatInput); ImGui::SameLine(); if (ImGui::Button("Send")) 
-                {
-                    Packet packet;
-                    packet.type = P2P_CHAT_MESSAGE;
-                    appendString(packet.data, chatInput);
-                    sendBroadcastNow(knownPlayerInfos, packet);
+                    std::string playerCountStr = std::to_string(knownPlayerInfos.size() + 1); // add one to include ourselves
+                    ImGui::Text(std::string("Players: " + playerCountStr).c_str());
 
-                    chatHistory.push_front("Me: " + chatInput);
-                    if (chatHistory.size() >= 15)
-                    {
-                        chatHistory.erase(chatHistory.end());
-                    }
-                }
-
-                for (std::string chat : chatHistory)
-                {
-                    ImGui::Text(chat.c_str());
-                }
-            } else ImGui::Text("Join a session to send messages!");
-
-            ImGui::End();
-
-            ImGui::Begin("Invites");
-
-            if (!inviteIds.empty())
-            {
-                int index = inviteIds.size();
-                while (index--)
-                {
-                    std::string inviteIdStr = std::to_string(inviteIds[index]);
-                    ImGui::Text(std::string("You have been invited to #" + inviteIdStr).c_str());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Join"))
+                    if (state == inSession && ImGui::Button("Leave Session"))
                     {
                         leaveSession();
                         std::cout << "Leaving session...\n\n";
-
+                    }
+                }
+                else if (state == noSession)
+                {
+                    ImGui::Separator();
+                    if (ImGui::Button("Find A Session"))
+                    {
                         std::cout << "Requesting session join info\n\n";
                         Packet packet;
-                        packet.type = REQUEST_FIND_SESSION_BY_ID;
-                        appendInt(packet.data, inviteIds[index]);
+                        packet.type = REQUEST_FIND_SESSION;
+                        sendNow(packet, matchmakingHost);
+                        state = waitingForSessionInfo;
+                    }
+
+                    ImGui::Separator();
+
+                    static int maxPlayers = 30;
+                    ImGui::Text("Max Players"); ImGui::SameLine();
+                    ImGui::InputInt("##maxplys", &maxPlayers);
+
+                    static int joinability = (int)allowAny;
+                    ImGui::Text("Joinability"); ImGui::SameLine();
+                    ImGui::Combo("##joinability", &joinability, joinabilityStrings, IM_ARRAYSIZE(joinabilityStrings));
+
+                    if (ImGui::Button("Create A Session"))
+                    {
+                        std::cout << "Requesting session creation.\n\n";
+                        Packet packet;
+                        packet.type = REQUEST_CREATE_SESSION;
+                        appendInt(packet.data, maxPlayers);
+                        appendInt(packet.data, joinability);
                         sendNow(packet, matchmakingHost);
                         state = waitingForSessionInfo;
                     }
                 }
-            }
-            else ImGui::Text("You haven't received any invites.");
 
-            static std::string inviteIPInput;
-            static int invitePortInput;
-            
-            ImGui::Text("IP Address");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(100.0f);
-            ImGui::InputText("##ip", &inviteIPInput);
-            ImGui::SameLine();
-            ImGui::Text("Port");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(100.0f);
-            ImGui::InputInt("##port", &invitePortInput);
-            ImGui::SameLine();
-            if (ImGui::Button("Send"))
-            {
-                ENetAddress target;
-                if (enet_address_set_host_ip(&target, inviteIPInput.c_str()) == 0)
-                {
-                    target.port = (enet_uint16)invitePortInput;
-                    if (target.port >= 0 && target.port <= USHRT_MAX)
-                    {
-                        Packet packet;
-                        packet.type = REQUEST_SEND_INVITE;
-                        appendAddress(packet.data, target);
-                        sendNow(packet, matchmakingHost);
-                    }
-                }
-            }
-
-            ImGui::End();
-
-            Samurai::GUI::standardFrameEnd();
-        }
-
-        void userInputLoop()
-        {
-            // Create a window and initialize glfw ready for the system to render to
-            if (!guiInitialized && !Samurai::GUI::initialize())
-            {
-                std::cout << "Failed to initialize GUI..." << std::endl;
-                return;
-            }
-            guiInitialized = true;
-
-            std::string input = "";
-            while (running) 
-            {
-                tickGUI();
-
-                if (input == "quit")
+                ImGui::Separator();
+                if (ImGui::Button("Quit"))
                 {
                     if (state == inSession)
                     {
                         leaveSession();
                         std::cout << "Leaving session...\n\n";
 
-                        while (state == inSession) { }
+                        while (state == inSession) {}
 
                         enet_peer_disconnect_now(matchmakingHost, 0);
                         enet_host_destroy(self);
                     }
 
                     running = false;
-                    break;
                 }
+
+                ImGui::End();
+
+                ImGui::Begin("Chat");
+
+                if (state == inSession)
+                {
+                    ImGui::InputText("", &chatInput); ImGui::SameLine(); if (ImGui::Button("Send"))
+                    {
+                        Packet packet;
+                        packet.type = P2P_CHAT_MESSAGE;
+                        appendString(packet.data, chatInput);
+                        sendBroadcastNow(knownPlayerInfos, packet);
+
+                        chatHistory.push_front("Me: " + chatInput);
+                        if (chatHistory.size() >= 15)
+                        {
+                            chatHistory.erase(chatHistory.end());
+                        }
+                    }
+
+                    for (std::string chat : chatHistory)
+                    {
+                        ImGui::Text(chat.c_str());
+                    }
+                }
+                else ImGui::Text("Join a session to send messages!");
+
+                ImGui::End();
+
+                ImGui::Begin("Invites");
+
+                if (!inviteIds.empty())
+                {
+                    int index = inviteIds.size();
+                    while (index--)
+                    {
+                        std::string inviteIdStr = std::to_string(inviteIds[index]);
+                        ImGui::Text(std::string("You have been invited to #" + inviteIdStr).c_str());
+                        ImGui::SameLine();
+                        if (ImGui::Button("Join"))
+                        {
+                            leaveSession();
+                            std::cout << "Leaving session...\n\n";
+
+                            std::cout << "Requesting session join info\n\n";
+                            Packet packet;
+                            packet.type = REQUEST_FIND_SESSION_BY_ID;
+                            appendInt(packet.data, inviteIds[index]);
+                            sendNow(packet, matchmakingHost);
+                            state = waitingForSessionInfo;
+                        }
+                    }
+                }
+                else ImGui::Text("You haven't received any invites.");
+
+                static std::string inviteIPInput;
+                static int invitePortInput;
+
+                ImGui::Text("IP Address");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(100.0f);
+                ImGui::InputText("##ip", &inviteIPInput);
+                ImGui::SameLine();
+                ImGui::Text("Port");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(100.0f);
+                ImGui::InputInt("##port", &invitePortInput);
+                ImGui::SameLine();
+                if (ImGui::Button("Send"))
+                {
+                    ENetAddress target;
+                    if (enet_address_set_host_ip(&target, inviteIPInput.c_str()) == 0)
+                    {
+                        target.port = (enet_uint16)invitePortInput;
+                        if (target.port >= 0 && target.port <= USHRT_MAX)
+                        {
+                            Packet packet;
+                            packet.type = REQUEST_SEND_INVITE;
+                            appendAddress(packet.data, target);
+                            sendNow(packet, matchmakingHost);
+                        }
+                    }
+                }
+
+                ImGui::End();
+
+                Samurai::GUI::standardFrameEnd();
             }
         }
 
@@ -735,6 +772,8 @@ namespace Samurai
         {
             while (running)
             {
+                if (!connectedToMatchmaking) continue; // wait for gui to connect us...
+
                 // Handle events (incoming packets, disconnects, etc.)
                 ENetEvent event;
                 while (enet_host_service(self, &event, 1000) > 0)
@@ -951,63 +990,23 @@ namespace Samurai
             }
             atexit(enet_deinitialize);
 
-            // servers address (IP and port)
-            ENetAddress serverAddress;
-            enet_address_set_host(&serverAddress, "127.0.0.1");
-            serverAddress.port = 1000;
-
             // self address (IP and port)
             ENetAddress localAddress;
             localAddress.host = ENET_HOST_ANY;
             localAddress.port = port;
 
-            if (!portCustomized)
+            // Create a local server which will send and recieve packets
+            int tries = MAX_CONNECTION_ATTEMPTS - 1;
+            while (tries--) // try to create an ENet server 5 times
             {
-                std::string input;
-                std::cout << "Enter local port: ";
-                std::getline(std::cin, input);
-
-                try { localAddress.port = std::stoi(input); }
-                catch (...) { localAddress.port = port; }
-            }
-
-            // Create the self (1 channel)
-            self = enet_host_create(&localAddress, 30, 1, 0, 0);
-            if (self == nullptr)
-            {
-                std::cerr << "An error occurred while trying to create an ENet server, trying alternative port" << std::endl;
-                localAddress.port = port + 100;
                 self = enet_host_create(&localAddress, 5, 2, 0, 0);
                 if (self == nullptr)
-                {
-                    std::cerr << "Alternative port failed, quitting" << std::endl;
-                    return;
-                }
-            }
-
-            // Connect to the server
-            matchmakingHost = enet_host_connect(self, &serverAddress, 2, 0);
-            if (matchmakingHost == nullptr)
-            {
-                std::cerr << "No available peers for initiating an ENet connection." << std::endl;
-                return;
-            }
-
-            // Wait for the connection to be established
-            ENetEvent event;
-            if (enet_host_service(self, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
-            {
-                std::cout << "Successfully connected to matchmaking server!" << "\n\n";
-            }
-            else
-            {
-                std::cerr << "Failed to connect to matchmaking server." << std::endl;
-                enet_host_destroy(self);
-                return;
+                    localAddress.port++; // try again on another port
+                else break; // server is created, no need to keep trying
             }
 
             std::thread networkThread(&clientSystem::networkLoop, this);
-            std::thread inputThread(&clientSystem::userInputLoop, this);
+            std::thread inputThread(&clientSystem::guiLoop, this);
 
             networkThread.join();
             inputThread.join();
