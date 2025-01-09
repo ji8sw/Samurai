@@ -28,6 +28,8 @@ namespace Samurai
             inviteOnly
         };
 
+        const char* joinabilityStrings[] = { "Public", "Friends Only (UNIMPLEMENTED)", "Invite Only" };
+
         struct playerConnectionInfo
         {
             ENetPeer* connection = nullptr;

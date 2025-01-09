@@ -18,6 +18,7 @@ namespace Samurai
         REQUEST_CREATE_SESSION,
         PROVIDE_SESSION_DETAILS,
         REQUEST_FIND_SESSION,
+        REQUEST_FIND_SESSION_BY_ID,
         PROVIDE_JOINER_INFO,
         REQUEST_JOIN_SESSION,
         REQUEST_SEND_INVITE,
@@ -280,6 +281,6 @@ namespace Samurai
 
     bool areAdderessesMatching(ENetAddress addrA, ENetAddress addrB)
     {
-        return addrA.host == addrB.host && addrA.host == addrB.port;
+        return addrA.host == addrB.host && addrA.port == addrB.port;
     }
 }

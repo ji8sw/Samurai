@@ -7,5 +7,6 @@
     <ClInclude Include="PacketHelper.h" />
     <ClInclude Include="Systems.h" />
     <ClInclude Include="MatchmakingData.h" />
+    <ClInclude Include="GUIHelper.h" />
   </ItemGroup>
 </Project>

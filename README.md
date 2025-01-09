@@ -1,7 +1,12 @@
 # Samurai - Matchmaking
 The Samurai matchmaking service allows players to create and join sessions, the matchmaking service serves as a middle-man, first, a player creates a session with a max player count, and if it should be advertised, then another player will join the session by asking the matchmaking service if any sessions are available (have free player slots and are advertised), if it is then the server sends info back, the info contains the session ID, which is used to identify and join a session, and a list of player IP addresses and ports, the joiner can then request to join the session via its ID, connecting to every player in the process.
 
-Included is an example P2P chat system, where messages are broadcasted using the console to every connected peer in the session, but the system is highly flexible and can be used to make games or other services, you could take away the console and implement it into a larger system, you could then implement callback functions so your game can implement player joining and leaving, or make a GUI to manage all the running sessions via the server.
+Included is an example P2P chat system, where messages are broadcasted using the new interface to every connected peer in the session, but the system is highly flexible and can be used to make games or other services, you could take away the console and implement it into a larger system, you could then implement callback functions so your game can implement player joining and leaving.
+
+# GUI
+The GUI is powered by ImGui, which runs on OpenGL3 and creates it's windows with GLFW, the GUI branch turns all primary features from the console into graphical features, including session creation, joining, invites, and a chat box.
+Included is `GUIHelper.h` which handles many basic things required to get started with the GUI, all of the things included are used in `Systems.h`.
+In future the server could also have its own GUI to manage sessions and the players inside them, but this GUI is a big step forward.
 
 ## How it works in more detail
 Samurai uses ENet, a library that allows you to connect via IP addresses and send data, however the data is sent in raw bytes, but Samurai allows you to create a list of bytes based on types. Samurai has a packet system, a packet contains an `int` for its type, which could be any of:

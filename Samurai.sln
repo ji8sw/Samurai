@@ -1,18 +1,24 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.12.35506.116 d17.12
+VisualStudioVersion = 17.12.35506.116
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Samurai", "Samurai.vcxproj", "{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		As Server|x64 = As Server|x64
+		As Server|x86 = As Server|x86
 		Debug|x64 = Debug|x64
 		Debug|x86 = Debug|x86
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.As Server|x64.ActiveCfg = As Client|x64
+		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.As Server|x64.Build.0 = As Client|x64
+		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.As Server|x86.ActiveCfg = As Client|Win32
+		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.As Server|x86.Build.0 = As Client|Win32
 		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.Debug|x64.ActiveCfg = Debug|x64
 		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.Debug|x64.Build.0 = Debug|x64
 		{9A7B6B3F-7C2B-4296-9B8F-F883A8923E43}.Debug|x86.ActiveCfg = Debug|Win32
