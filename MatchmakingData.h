@@ -36,6 +36,7 @@ namespace Samurai
             ENetAddress address;
             bool isHost = false;
             int sessionId = 0;
+            std::string name;
 
             // used mostly in client settings when connecting to other players
             bool isPlayer = false;

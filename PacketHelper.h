@@ -26,7 +26,8 @@ namespace Samurai
         PLAYER_LEFT,
 
         // P2P
-        P2P_CHAT_MESSAGE
+        P2P_CHAT_MESSAGE,
+        P2P_PROVIDE_NAME
     };
 
     enum QuickResponseType  // used in cases when you dont want to send extra data, helper functions exist for sending these easily
@@ -122,6 +123,26 @@ namespace Samurai
         return value;
     }
 
+    // Append a uint16 to a vector<char> used in a Packet
+    template <typename T>
+    void appendData(std::vector<char>& buffer, T value)
+    {
+        buffer.insert(buffer.end(),
+            reinterpret_cast<const char*>(&value),
+            reinterpret_cast<const char*>(&value) + sizeof(T));
+    }
+
+    // Extract a uint16_t from a vector<char> used in a Packet
+    template <typename T>
+    T extractData(const std::vector<char>& buffer, size_t& offset)
+    {
+        if (offset + sizeof(T) > buffer.size()) { std::cerr << "Buffer underflow while extracting data." << std::endl; return INVALID_INT; }
+        T value;
+        memcpy(&value, buffer.data() + offset, sizeof(T));
+        offset += sizeof(T);
+        return value;
+    }
+
     // Append an ENetAddress (enet_uint32) and port (enet_uint16) to a vector<char> used in a Packet
     void appendAddress(std::vector<char>& buffer, ENetAddress addr)
     {
@@ -143,15 +164,15 @@ namespace Samurai
     // Append a string to a vector<char> used in a Packet
     void appendString(std::vector<char>& buffer, const std::string& value) 
     {
-        int length = value.size();
-        appendInt(buffer, length);
+        size_t length = value.size();
+        appendData<size_t>(buffer, length);
         buffer.insert(buffer.end(), value.begin(), value.end());
     }
 
     // Extract a string from a vector<char> used in a Packet
     std::string extractString(const std::vector<char>& buffer, size_t& offset) 
     {
-        int length = extractInt(buffer, offset);
+        size_t length = extractData<size_t>(buffer, offset);
         if (offset + length > buffer.size()) { std::cerr << "Buffer underflow while extracting string." << std::endl; return INVALID_STR; }
         std::string value(buffer.begin() + offset, buffer.begin() + offset + length);
         offset += length;
