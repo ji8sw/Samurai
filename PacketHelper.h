@@ -223,6 +223,6 @@ namespace Samurai
 
     bool areAdderessesMatching(ENetAddress addrA, ENetAddress addrB)
     {
-        return addrA.host == addrB.host && addrA.host == addrB.port;
+        return addrA.host == addrB.host && addrA.port == addrB.port;
     }
 }
