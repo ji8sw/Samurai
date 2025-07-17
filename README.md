@@ -1,3 +1,11 @@
+# Samurai
+
+Samurai is a header-only packet manager built on top of ENet, it turns raw packet data into a usable format, its entirely customizable and lightweight.
+
+**As of 17/07/25, the `matchmaking` branch has become the default branch and other branches will no longer be updated until further notice.**
+
+The only code you actually need to start a project is `Samurai.hpp`
+
 # Samurai - Matchmaking
 The Samurai matchmaking service allows players to create and join sessions, the matchmaking service serves as a middle-man, first, a player creates a session with a max player count, and if it should be advertised, then another player will join the session by asking the matchmaking service if any sessions are available (have free player slots and are advertised), if it is then the server sends info back, the info contains the session ID, which is used to identify and join a session, and a list of player IP addresses and ports, the joiner can then request to join the session via its ID, connecting to every player in the process.
 
@@ -9,8 +17,8 @@ Samurai uses ENet, a library that allows you to connect via IP addresses and sen
     enum PacketType
     {
         // Core
-        PROVIDE_QUICK_RESPONSE,
-        PROVIDE_QUICK_RESPONSE_MESSAGE,
+        PROVIDE_QUICK_RESPONSE, // Unused
+        PROVIDE_QUICK_RESPONSE_MESSAGE, // Unused
 
         // Matchmaking
         REQUEST_CREATE_SESSION,
@@ -24,19 +32,22 @@ Samurai uses ENet, a library that allows you to connect via IP addresses and sen
 
         // P2P
         P2P_CHAT_MESSAGE
+
+        // You can add or remove any of these
     };
 and then a list of bytes, the list of bytes can be appended and extracted with included helper functions, these include:
-`appendInt / extractInt`
-`appendUInt32 / extractUInt32`
-`appendUInt16 / extractUInt16`
+`appendData / extractData`
 `appendAddress / extractAddress` (for ENet addresses (IP and Port))
 `appendString / extractString`
-you can always add more, even combining these previous functions to support a struct (for example Address functions combine UInt32 (for IP) and UInt16 (for port).
+you can always add more, even combining these previous functions to support a struct.
+
+To use `appendData/extractData`, you use it like: `int Data = extractData<int>(incoming.data, offset);`
+for different types you can just change `int` to whatever.
+you could create more helper functions for each type, you can find them in the other Git branches, however they were removed from the primary branch in favor of `appendData/extractData`.
 
 Packets can be sent very easily using these functions:
 `sendNow` sends packet to a specific peer
 `sendBroadcastNow` sends packet to a list of peers
-there are some other helper functions for different kinds of packets like quick responses which should contain no data.
 
 It might seem limited, this is because it only contains what is used in Samurai, much more can be added and fondled with.
 
@@ -57,3 +68,5 @@ that's it, very easy, here's how you would receive it:
     }
 
 you can see all of this in action inside `System.h`, which is where most important logic takes place.
+Or in my other projects:
+[TogetherMake](https://github.com/ji8sw/TogetherMake)
